@@ -4,99 +4,184 @@ import '../models/task_model.dart';
 import '../services/api_service.dart';
 
 class TaskController extends GetxController {
-  var tasks = <TaskModel>[].obs;
-  var isLoading = false.obs;
+  /// Observable list of tasks (auto updates UI when changed)
+  final tasks = <TaskModel>[].obs;
 
+  /// Observable loading state (used to show loader/spinner in UI)
+  final isLoading = false.obs;
+
+  /// ------------------------------------------------------------
+  /// Helper: Show snackbar messages in a consistent way
+  /// ------------------------------------------------------------
+  void _showError(String message) {
+    Get.snackbar("Error", message);
+  }
+
+  void _showSuccess(String message) {
+    Get.snackbar("Success", message);
+  }
+
+  /// ------------------------------------------------------------
+  /// Helper: Extract backend error message from response body
+  /// Expected response format: { "message": "Something went wrong" }
+  /// ------------------------------------------------------------
   String _parseErrorMessage(String body) {
     try {
-      final data = jsonDecode(body) as Map<String, dynamic>;
-      return data['message']?.toString() ?? 'Request failed';
+      final data = jsonDecode(body);
+
+      // Ensure it is a JSON object
+      if (data is Map<String, dynamic>) {
+        return data['message']?.toString() ?? 'Request failed';
+      }
+
+      return "Request failed";
     } catch (_) {
+      // If backend response is not JSON
       return 'Request failed';
     }
   }
 
+  /// ------------------------------------------------------------
+  /// Called automatically when controller is created
+  /// ------------------------------------------------------------
   @override
   void onInit() {
-    fetchTasks();
+    fetchTasks(); // Load tasks immediately when app opens
     super.onInit();
   }
 
-  void fetchTasks() async {
+  /// ------------------------------------------------------------
+  /// Fetch all tasks from backend API
+  /// ------------------------------------------------------------
+  Future<void> fetchTasks() async {
     isLoading(true);
+
     try {
-      tasks.value = await ApiService.getTasks();
+      // Call API service
+      final result = await ApiService.getTasks();
+
+      // Update observable list (UI refreshes automatically)
+      tasks.value = result;
     } catch (e) {
-      Get.snackbar("Error", e.toString().replaceFirst("Exception: ", ""));
+      // If error happens, show message
+      _showError(e.toString().replaceFirst("Exception: ", ""));
     } finally {
       isLoading(false);
     }
   }
 
-  void addTask(TaskModel task) async {
+  /// ------------------------------------------------------------
+  /// Create a new task in backend
+  /// ------------------------------------------------------------
+  Future<void> addTask(TaskModel task) async {
     try {
       final res = await ApiService.createTask(task);
+
       if (res.statusCode == 201) {
+        _showSuccess("Task created successfully");
         fetchTasks();
       } else {
-        Get.snackbar("Error", _parseErrorMessage(res.body));
+        _showError(_parseErrorMessage(res.body));
       }
     } catch (e) {
-      Get.snackbar("Error", "Connection failed. Check if backend is running.");
+      _showError("Connection failed. Check if backend is running.");
     }
   }
 
-  void updateTaskFull(TaskModel task) async {
+  /// ------------------------------------------------------------
+  /// Update full task information (title, dates, description, etc.)
+  /// ------------------------------------------------------------
+  Future<void> updateTaskFull(TaskModel task) async {
     try {
       final res = await ApiService.updateTask(task.id, task);
+
       if (res.statusCode == 200) {
+        _showSuccess("Task updated successfully");
         fetchTasks();
       } else {
-        Get.snackbar("Error", _parseErrorMessage(res.body));
+        _showError(_parseErrorMessage(res.body));
       }
     } catch (e) {
-      Get.snackbar("Error", "Connection failed. Check if backend is running.");
+      _showError("Connection failed. Check if backend is running.");
     }
   }
 
-  void updateTaskStatus(String id, String status) async {
+  /// ------------------------------------------------------------
+  /// Update only the task status (example: Pending -> Completed)
+  ///
+  /// Enhancement:
+  /// - Optimistic UI update: UI changes immediately before API response
+  /// - If API fails, it restores old value
+  /// ------------------------------------------------------------
+  Future<void> updateTaskStatus(String id, String status) async {
     try {
+      // Find task index inside list
       final idx = tasks.indexWhere((t) => t.id == id);
       if (idx < 0) return;
-      final task = tasks[idx];
-      final updated = TaskModel(
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        startDate: task.startDate,
-        dueDate: task.dueDate,
+
+      final oldTask = tasks[idx];
+
+      // Create updated task object (same task but new status)
+      final updatedTask = TaskModel(
+        id: oldTask.id,
+        title: oldTask.title,
+        description: oldTask.description,
+        startDate: oldTask.startDate,
+        dueDate: oldTask.dueDate,
         status: status,
-        priority: task.priority,
-        assignedUserId: task.assignedUserId,
-        assignedUserName: task.assignedUserName,
-        project: task.project,
+        priority: oldTask.priority,
+        assignedUserId: oldTask.assignedUserId,
+        assignedUserName: oldTask.assignedUserName,
+        project: oldTask.project,
       );
-      final res = await ApiService.updateTask(id, updated);
+
+      //  Optimistic update (fast UI)
+      tasks[idx] = updatedTask;
+
+      // Send request to backend
+      final res = await ApiService.updateTask(id, updatedTask);
+
       if (res.statusCode == 200) {
-        fetchTasks();
+        _showSuccess("Status updated");
       } else {
-        Get.snackbar("Error", _parseErrorMessage(res.body));
+        //  Restore old task if backend rejects
+        tasks[idx] = oldTask;
+        _showError(_parseErrorMessage(res.body));
       }
     } catch (e) {
-      Get.snackbar("Error", "Connection failed. Check if backend is running.");
+      _showError("Connection failed. Check if backend is running.");
     }
   }
 
-  void deleteTask(String id) async {
+  /// ------------------------------------------------------------
+  /// Delete task by ID
+  ///
+  /// Enhancement:
+  /// - Optimistic delete: removes immediately
+  /// - If API fails, it restores task
+  /// ------------------------------------------------------------
+  Future<void> deleteTask(String id) async {
     try {
+      // Find task index
+      final idx = tasks.indexWhere((t) => t.id == id);
+      if (idx < 0) return;
+
+      final removedTask = tasks[idx];
+
+      //  Optimistic remove
+      tasks.removeAt(idx);
+
       final res = await ApiService.deleteTask(id);
+
       if (res.statusCode == 200) {
-        fetchTasks();
+        _showSuccess("Task deleted");
       } else {
-        Get.snackbar("Error", _parseErrorMessage(res.body));
+        //  Restore task if delete failed
+        tasks.insert(idx, removedTask);
+        _showError(_parseErrorMessage(res.body));
       }
     } catch (e) {
-      Get.snackbar("Error", "Connection failed. Check if backend is running.");
+      _showError("Connection failed. Check if backend is running.");
     }
   }
 }
